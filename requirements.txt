@@ -4,4 +4,4 @@ ultralytics
 supervision 
 openai 
 git+https://github.com/ultralytics/CLIP.git
-streamlit_webrtc
+streamlit-webrtc
