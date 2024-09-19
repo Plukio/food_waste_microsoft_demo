@@ -17,7 +17,7 @@ model_general = YOLO('ckpt/yolov8s-worldv2.pt')
 model_general.set_classes(["food"])
 
 client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY") )
+    api_key=st.secrets["OpenAI_key"])
 
 @st.dialog("Detection result")
 def show_result(frame, name, amount):
