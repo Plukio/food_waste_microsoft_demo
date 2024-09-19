@@ -1,5 +1,4 @@
 opencv-python-headless
-opencv-python
 streamlit 
 ultralytics 
 supervision 
