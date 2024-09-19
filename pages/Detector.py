@@ -8,43 +8,38 @@ import json
 import os
 import base64
 import re
-import os
-
+import asyncio
+from datetime import datetime
+from streamlit_webrtc import WebRtcMode, webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # Load the YOLO model
-model_general = YOLO('ckpt/yolov8s-worldv2.pt')
+MODEL_PATH = 'ckpt/yolov8s-worldv2.pt'
+if not os.path.exists(MODEL_PATH):
+    st.error(f"YOLO model not found at {MODEL_PATH}. Please ensure the model file exists.")
+    st.stop()
+
+model_general = YOLO(MODEL_PATH)
 model_general.set_classes(["food"])
 
-client = OpenAI(
-    api_key=st.secrets["OpenAI_key"])
+# Initialize OpenAI client
+try:
+    openai_api_key = st.secrets["OpenAI_key"]
+    client = OpenAI(api_key=openai_api_key)
+except KeyError:
+    st.error("OpenAI API key not found in secrets.")
+    st.stop()
 
-@st.dialog("Detection result")
-def show_result(frame, name, amount):
-    FRAME_WINDOW_RESULT = st.image([])
-    st.write(f"Food detected")
-    FRAME_WINDOW_RESULT.image(frame)
-    st.write(f"{name}, {amount} g.")
-    if st.button("Confirm"):
-        st.rerun()
-        time.sleep(3)
-        
 # Directory to save the image and data
 IMAGE_CACHE_DIRECTORY = "data"
 RESULTS_DB = "food_waste_records.json"
+os.makedirs(IMAGE_CACHE_DIRECTORY, exist_ok=True)
 
-def preprocess_image(frame):
-    """
-    Preprocess the image for classification.
-    """
-    try:
-        # Example preprocessing: resize the image
-        processed_frame = cv2.resize(frame, (224, 224))  # Adjust size if necessary
-        return processed_frame
-    except Exception as e:
-        st.error(f"Error in preprocessing: {e}")
-        return None
+# Initialize Supervision Annotators
+bbox_annotator = sv.BoxAnnotator(thickness=2)
+label_annotator = sv.LabelAnnotator(text_thickness=2, text_scale=0.5, text_color=sv.Color.BLACK)
 
-def classify_food_with_gpt4(image):
+# GPT-4 Classification Function
+async def classify_food_with_gpt4(image):
     """
     Use GPT-4 to classify the food waste and ensure the output is in JSON format.
     """
@@ -65,22 +60,19 @@ def classify_food_with_gpt4(image):
         )
         
         # Call the OpenAI API
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4-turbo",
             messages=[
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
-                    ],
+                    "content": prompt
                 }
             ],
             max_tokens=150
         )
         
         response_text = response.choices[0].message.content.strip()
-        print(f"Raw response: {response_text}")
+        st.write(f"Raw GPT-4 response: {response_text}")
         
         # Extract JSON-like content using regular expressions
         json_pattern = r"\{.*\}"
@@ -105,7 +97,7 @@ def classify_food_with_gpt4(image):
         st.error(f"Error in GPT-4 classification: {e}")
         return None
 
-
+# Function to save classification results to database
 def save_to_database(image_path, timestamp, classification):
     """
     Save the food waste record to a database (JSON file).
@@ -129,85 +121,147 @@ def save_to_database(image_path, timestamp, classification):
             f.seek(0)
             json.dump(data, f, indent=4)
         
-        st.toast(f"Saved to database: {record}")
-        time.sleep(0.5)
+        st.success(f"Saved to database: {record}")
     except Exception as e:
         st.error(f"Error saving to database: {e}")
 
-def process_webcam(model):
-    bbox = sv.BoxAnnotator(thickness=2)
-    food_label = sv.LabelAnnotator(text_thickness=2, text_scale=0.5, text_color=sv.Color.BLACK)
-
-    # Initialize webcam
-    camera = cv2.VideoCapture(0)
-    FRAME_WINDOW = st.image([])
-
-    i = 0
-    detection_count = 0  
-    saved_frame = None
-
+# Preprocess Image Function
+def preprocess_image(frame):
+    """
+    Preprocess the image for classification.
+    """
     try:
-        while True:
-            # Capture frame from webcam
-            ret, frame = camera.read()
-            if not ret:
-                st.error("Failed to capture image from webcam.")
-                break
-
-            # Detect food every 5th frame
-            if i % 5 == 0:
-                results_specific = model(frame)
-                if len(results_specific[0].boxes.conf) > 0:
-                    detection_count += 1
-                    if detection_count == 2:
-                        st.toast('Food waste detected!')
-                        saved_frame = frame
-                        break  
-                else:
-                    detection_count = 0
-
-            # Display the current frame in Streamlit
-            show_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            FRAME_WINDOW.image(show_frame)
-            i += 1
-        else:
-            st.write('Stopped')
-
-        # Release the webcam
-        camera.release()
-
-        # If a frame is saved, process and classify it
-        if saved_frame is not None:
-            st.toast('Processing image...')
-            time.sleep(0.5)
-            processed_frame = preprocess_image(saved_frame)
-            if processed_frame is not None:
-                st.toast('Classifying food waste...')
-                time.sleep(0.5)
-                classification_result = classify_food_with_gpt4(processed_frame)
-                if classification_result is not None:
-                    food_name = classification_result.get('name')
-                    amount = classification_result.get('amount')
-
-                    st.toast('Recording food waste...')
-                    time.sleep(0.5)
-                    timestamp = time.strftime("%Y%m%d-%H%M%S")
-                    image_path = f'food_waste_{timestamp}.jpg'
-                    cv2.imwrite(os.path.join(IMAGE_CACHE_DIRECTORY, image_path), saved_frame)
-
-                    # Save to the database
-                    save_to_database(image_path, timestamp, classification_result)
-
-                    show_result(show_frame, food_name, amount)
-
+        # Example preprocessing: resize the image
+        processed_frame = cv2.resize(frame, (224, 224))  # Adjust size if necessary
+        return processed_frame
     except Exception as e:
-        st.error(f"Error: {e}")
-    finally:
-        # Ensure the camera is released even if an error occurs
-        if camera.isOpened():
-            camera.release()
+        st.error(f"Error in preprocessing: {e}")
+        return None
+
+# Result Display Function
+def show_result(frame, name, amount):
+    st.dialog("Detection result")
+    FRAME_WINDOW_RESULT = st.image([])
+    st.write("### Food detected")
+    FRAME_WINDOW_RESULT.image(frame)
+    st.write(f"**{name}**, **{amount} g**.")
+    if st.button("Confirm"):
+        st.experimental_rerun()
+        time.sleep(3)
+
+# Video Processor Class for streamlit-webrtc
+class VideoProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.detection_count = 0
+        self.saved_frame = None
+        self.processing = False  # To prevent multiple simultaneous processing
+
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        annotated_image = img.copy()
+
+        # Perform YOLO detection every frame
+        results = model_general(img)
+        detections = results[0]
+
+        if detections.boxes:
+            # Draw bounding boxes
+            boxes = detections.boxes.xyxy.numpy()
+            confidences = detections.boxes.conf.numpy()
+            class_ids = detections.boxes.cls.numpy().astype(int)
+
+            for box, conf, cls_id in zip(boxes, confidences, class_ids):
+                if conf < 0.5:
+                    continue  # Skip low-confidence detections
+                label = model_general.names[cls_id]
+                cv2.rectangle(annotated_image, (int(box[0]), int(box[1])), 
+                              (int(box[2]), int(box[3])), (0, 255, 0), 2)
+                cv2.putText(annotated_image, f"{label} {conf:.2f}", 
+                            (int(box[0]), int(box[1]) - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
+                if label.lower() == "food":
+                    self.detection_count += 1
+                    if self.detection_count >= 2 and not self.processing:
+                        self.processing = True
+                        self.saved_frame = img.copy()
+                        asyncio.run(self.handle_detection())
+                    break
+        else:
+            self.detection_count = 0  # Reset if no detections
+
+        return av.VideoFrame.from_ndarray(annotated_image, format="bgr24")
+    
+    async def handle_detection(self):
+        st.toast('Food waste detected! Processing image...')
+        time.sleep(1)  # Brief pause
+
+        processed_frame = preprocess_image(self.saved_frame)
+        if processed_frame is not None:
+            st.toast('Classifying food waste with GPT-4...')
+            classification_result = await classify_food_with_gpt4(processed_frame)
+            if classification_result is not None:
+                food_name = classification_result.get('name')
+                amount = classification_result.get('amount')
+
+                st.toast('Recording food waste...')
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                image_filename = f'food_waste_{timestamp}.jpg'
+                image_path = os.path.join(IMAGE_CACHE_DIRECTORY, image_filename)
+                cv2.imwrite(image_path, self.saved_frame)
+
+                # Save to the database
+                save_to_database(image_path, timestamp, classification_result)
+
+                # Show the result to the user
+                show_result(cv2.cvtColor(self.saved_frame, cv2.COLOR_BGR2RGB), food_name, amount)
+        
+        self.processing = False
+        self.detection_count = 0  # Reset after processing
 
 # Streamlit UI
-st.title("AI Food Waste Tracking")
+st.title("AI Food Waste Tracking with Real-Time Webcam")
 
-process_webcam(model_general)
+# WebRTC Configuration
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+webrtc_ctx = webrtc_streamer(
+    key="food-waste-tracking",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration=RTC_CONFIGURATION,
+    video_processor_factory=VideoProcessor,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
+
+# Display Saved Records
+st.header("Saved Food Waste Records")
+if os.path.exists(RESULTS_DB):
+    try:
+        with open(RESULTS_DB, 'r') as f:
+            records = json.load(f)
+            if records:
+                for record in records:
+                    st.subheader(f"{record['timestamp']}")
+                    st.image(os.path.join(IMAGE_CACHE_DIRECTORY, record['image_path']), width=300)
+                    st.write(f"**Food:** {record['name']}")
+                    st.write(f"**Amount:** {record['amount']} g")
+            else:
+                st.write("No records found.")
+    except json.JSONDecodeError:
+        st.error("Error reading the database file.")
+else:
+    st.write("No records found.")
+
+# Additional Information or Controls
+st.markdown(
+    """
+    ### About
+    This application uses YOLO for object detection to identify food waste in real-time via your webcam.
+    Detected food items are classified using GPT-4, and the results are saved for tracking purposes.
+
+    **Note:** Ensure your webcam is enabled and permissions are granted for this application to function correctly.
+    """
+)
