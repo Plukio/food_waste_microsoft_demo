@@ -98,7 +98,7 @@ def stream_data_and_analysis(df):
         st.markdown(suggestion)
 
 # Load the data
-df = pd.read_csv('/Users/apple/Desktop/food_waste_demo/data/synthetic_food_waste_3months.csv')
+df = pd.read_csv('/food_waste_demo/data/synthetic_food_waste_3months.csv')
 
 # Convert the timestamp to datetime
 df['timestamp'] = pd.to_datetime(df['timestamp'])
