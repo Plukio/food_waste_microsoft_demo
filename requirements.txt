@@ -3,4 +3,4 @@ streamlit
 ultralytics 
 supervision 
 openai 
-clip
+git+https://github.com/ultralytics/CLIP.git
