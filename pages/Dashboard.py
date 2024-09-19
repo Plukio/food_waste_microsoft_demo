@@ -9,7 +9,7 @@ from openai import OpenAI
 # Simulated GPT API client (replace with actual API client setup)
 client = OpenAI(api_key=st.secrets["OpenAI_key"])
 
-SUGGESTION_FILE = "/Users/apple/Desktop/food_waste_demo/data/suggest.json"
+SUGGESTION_FILE = "/food_waste_demo/data/suggest.json"
 
 def classify_food_with_gpt4(df):
     """
