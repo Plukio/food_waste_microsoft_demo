@@ -3,7 +3,6 @@ import streamlit as st
 from ultralytics import YOLO
 import supervision as sv
 import time
-import pyautogui
 from openai import OpenAI
 import json
 import os
@@ -26,7 +25,6 @@ def show_result(frame, name, amount):
     FRAME_WINDOW_RESULT.image(frame)
     st.write(f"{name}, {amount} g.")
     if st.button("Confirm"):
-        pyautogui.press('esc')
         st.rerun()
         time.sleep(3)
         
